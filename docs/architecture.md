@@ -98,9 +98,9 @@ C4Container
     Person(admin, "Operator", "Grafana, admin CLI, Prometheus")
 
     System_Boundary(cluster, "RutSeriDB Cluster") {
-        Container(coord, "Coordinator Node", "Rust · Tokio · Raft", "Routes writes to shard leaders. Distributes queries across storage nodes. Manages cluster metadata via Raft.")
-        Container(leader, "Storage Node — Leader", "Rust · Tokio", "Runs Ingest Engine, WAL, MemTable, Part file writer, local Query Engine, and Replication Manager.")
-        Container(replica, "Storage Node — Replica", "Rust · Tokio", "Applies replicated WAL from the leader. Acts as failover target when the leader fails.")
+        Container(coord, "Coordinator Node", "Rust · Tokio · Raft + SWIM Gossip", "Routes writes to shard leaders. Distributes queries across storage nodes. Manages cluster schema + shard map via Raft (CP). Detects node failures via SWIM gossip (AP).")
+        Container(leader, "Storage Node — Leader", "Rust · Tokio", "Runs Ingest Engine, WAL, MemTable, Part file writer, local Query Engine, and Replication Manager. Participates in gossip membership ring.")
+        Container(replica, "Storage Node — Replica", "Rust · Tokio", "Applies replicated WAL from the leader. Serves follower reads (consistency=ONE). Acts as failover target when the leader fails.")
     }
 
     System_Ext(fs, "File System", "Durable storage")
@@ -484,16 +484,43 @@ flowchart TB
 | **Shard rebalancing** | Coordinate Part migration + catalog update *(v2)* |
 | **Scaling out** | Add nodes; assign new shards and migrate data *(v2)* |
 
-### Heartbeat & Failure Detection
+### Failure Detection — SWIM Gossip (AP)
+
+Node liveness uses **SWIM gossip** (not Raft heartbeats). This is AP: membership information propagates peer-to-peer in O(log N) rounds, independent of the Raft leader.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Alive : Node registers
-    Alive --> Suspect : 3 missed heartbeats (3 s)
-    Suspect --> Alive : Heartbeat received
-    Suspect --> Dead : 5 missed heartbeats (5 s)
-    Dead --> [*] : Leader election triggered for affected shards
+sequenceDiagram
+    participant A as Node A
+    participant B as Node B (probe target)
+    participant C as Node C (indirect probe)
+
+    A->>B: ping (direct probe every 1s)
+    alt B responds
+        B-->>A: ack ✅  — B stays Alive
+    else B silent for 500ms
+        A->>C: ping-req(B)  [indirect probe]
+        C->>B: ping
+        alt B responds via C
+            B-->>C: ack
+            C-->>A: nack=false ✅
+        else still silent
+            A->>A: mark B as Suspect
+            Note over A: gossip("B=Suspect") to random peers
+            Note over A: if still no ack after 2s → B=Dead
+            A->>A: gossip("B=Dead") → O(log N) propagation
+            Note over A: Trigger Raft-based leader election
+            Note over A: for shards where B was leader
+        end
+    end
 ```
+
+| Property | Value |
+|----------|-------|
+| Probe interval | 1 s |
+| Indirect probes | 3 random peers |
+| Suspect timeout | 2 s |
+| Full propagation | O(log N) gossip rounds (~3–5 s for 100 nodes) |
+| Raft involvement | Only triggered AFTER Dead declaration, for leader election |
 
 ### Shard Key Computation
 
@@ -521,6 +548,8 @@ All configuration is provided via a TOML file. Key sections:
 | `[merge]` | `enabled`, `max_parts_per_partition`, `target_part_size_bytes` |
 | `[indexes]` | `inverted.enabled`, `inverted.tag_columns`, `inverted.max_values_per_key` |
 | `[io_uring]` | `enabled` (Phase 3), `sqpoll` (advanced), `registered_buffer_count`, `wal_direct_io`, `part_direct_io` |
+| `[gossip]` | `probe_interval_ms` (default 1000), `suspect_timeout_ms` (default 2000), `fanout` (default 3) |
+| `[consistency]` | `read_level` (`one`/`quorum`/`all`, default `one`) |
 | `[tables.<name>]` | `partition_duration`, `compression`, `primary_tags` |
 
 ---
@@ -536,7 +565,7 @@ All configuration is provided via a TOML file. Key sections:
 | D5 | Default compression | LZ4 | Zstd, None | Speed over ratio for time-series hot data |
 | D6 | Durability default | SyncBatch 10 ms | Sync, Async | Balances safety and write throughput |
 | D7 | Storage format | Custom `.rpart` (columnar) | Parquet, Apache Arrow | Full control; learning objective |
-| D8 | Coordinator consensus | Raft (single group, metadata only) | etcd external, ZooKeeper | No external deps; metadata is small |
+| D8 | Cluster consistency model | **CP + AP hybrid** — Raft (schema + shard map) · SWIM Gossip (membership + failure detection) | Pure Raft (CP only), Pure Dynamo (AP only) | Schema needs strong consistency; membership detection doesn't — gossip is faster, leaderless, and AP |
 | D9 | Query distribution | Coordinator fan-out | Push-down-only, Spark-like | Simpler model; Coordinator is not a write bottleneck |
 | D10 | Index types | Min/Max (all columns) + Bloom Filters (tags + low-cardinality fields) + Inverted (tag→Parts in Catalog) | Full B-tree / hash secondary indexes | Zero write-path cost for file-level indexes; inverted index backfill is async |
 | D11 | Ingest write concurrency | Actor task per shard + `oneshot` per request + group commit drain | Mutex per shard, thread per client | Actor never blocks Tokio thread; drain queue → one `fsync` covers N clients; free cancellation via dropped `rx` |
@@ -567,14 +596,18 @@ All configuration is provided via a TOML file. Key sections:
 ### Phase 1 — Distribution
 
 - [ ] Shard key computation
-- [ ] Coordinator: Raft-replicated Metadata Catalog
+- [ ] Coordinator: Raft-replicated Metadata Catalog (schema + shard map — CP)
+- [ ] **SWIM Gossip**: node membership, failure detection (AP — independent of Raft)
+  - [ ] Direct + indirect probing (1s interval, 3 indirect peers)
+  - [ ] Suspect/Dead state machine → trigger Raft leader election on Dead
+- [ ] **Follower reads**: serve reads from any replica (`consistency=ONE|QUORUM` config)
 - [ ] Coordinator: Write Router
 - [ ] Coordinator: Query fan-out + result merger
   - [ ] Inverted index lookup in distributed query planning
 - [ ] Storage Node: internal gRPC server
 - [ ] Storage Node: WAL replication (leader → replica streaming)
   - [ ] Inverted index replicated as part of Catalog replication
-- [ ] Cluster Manager: heartbeat, leader election, node registration
+- [ ] Cluster Manager: gossip-based membership + Raft-triggered leader election
 
 ### Phase 2 — Operations & Hardening
 
@@ -607,7 +640,7 @@ See [storage/io_uring.md](./storage/io_uring.md) for the full design.
 | # | Question | Impact |
 |---|----------|--------|
 | Q1 | **Shard count mutability** — Can `num_shards` change post-creation? Requires full rehash. | High |
-| Q2 | **Follower reads** — Allow stale reads from replicas to reduce leader load? | Medium |
+| Q2 | **Follower reads** — Resolved: serve reads from any replica with `consistency=ONE` (default). `QUORUM`/`ALL` available for stronger guarantees. | ✅ Resolved |
 | Q3 | **Cross-shard transactions** — Should multi-table or multi-shard atomic writes ever be supported? | Medium |
 | Q4 | **Hot config reload** — Can table configs or memory limits be updated at runtime? | Low |
 | Q5 | **Object storage (S3)** — Should `.rpart` files be tiered to S3 for cold data? | Medium |
@@ -617,7 +650,6 @@ See [storage/io_uring.md](./storage/io_uring.md) for the full design.
 
 ## Future Work
 
-- **Follower reads** — stale reads from replicas with bounded lag
 - **S3 tiering** — automatic offload of cold Parts to object storage
 - **io_uring + Direct I/O** — batch WAL writes, parallel column reads, O_DIRECT Part flush to eliminate cache pollution; see [storage/io_uring.md](./storage/io_uring.md)
 - **Kubernetes operator** — automated cluster lifecycle management

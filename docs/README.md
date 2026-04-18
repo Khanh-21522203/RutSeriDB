@@ -140,7 +140,7 @@ flowchart LR
 | D5 | Compression | LZ4 | Speed > ratio for hot TSDB data |
 | D6 | Durability default | SyncBatch 10 ms | Safety + throughput balance |
 | D7 | Disk format | Custom columnar `.rpart` | Full control; Parquet-inspired but simpler |
-| D8 | Metadata consensus | Single Raft group | No external deps; metadata is small |
+| D8 | Cluster consistency | **CP + AP hybrid** — Raft (schema/shard map) + SWIM Gossip (membership) | Gossip is leaderless and AP; Raft only where strong consistency is truly needed |
 | D9 | Query execution | Coordinator fan-out | Simple; Coordinator not a write bottleneck |
 | D10 | Index types | Min/Max + Bloom + Inverted | Zero write-path overhead; async backfill |
 | D11 | Ingest write model | Actor + `oneshot` + group commit drain | Zero thread blocking; free cancellation; natural group commit |
@@ -165,6 +165,9 @@ The Coordinator detects the failure via missed heartbeats (5 s), then promotes t
 
 **Q: Is this similar to Kafka KRaft?**
 Yes — the high-level pattern is identical: Raft for metadata consensus (Coordinator ≈ KRaft controllers), leader-follower streaming for data (Storage Nodes ≈ Kafka brokers), data partitioned by hash (shards ≈ partitions).
+
+**Q: Why use both Raft and SWIM Gossip together?**
+Raft (CP) is used for things that must be exactly consistent everywhere: table schemas and the shard-to-node map. SWIM Gossip (AP) is used for node liveness and failure detection — it propagates in O(log N) rounds, works even when the Raft leader is unreachable, and has no leader election overhead. Once gossip declares a node Dead, Raft is triggered only for leader election of the affected shards. This is the same pattern used by CockroachDB and Consul.
 
 **Q: How does the ingest write path avoid blocking Tokio threads?**
 Each ingest request creates a `oneshot::channel` (a "queue of 1" for the response), packages the batch with the sender into the shard's `mpsc` dispatch queue, then parks at `rx.await`. The Shard Actor drains all pending requests, coalesces them into one WAL write, does a single `fsync()`, inserts into MemTable, then fires `tx.send(OK)` for every waiting client simultaneously. This means N clients share one `fsync` (group commit) with no thread blocking and free cancellation detection. See [components.md § Ingest Engine](./components.md).
