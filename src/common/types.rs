@@ -121,3 +121,61 @@ pub struct PartMeta {
     /// When this Part was created (Unix seconds).
     pub created_at: i64,
 }
+
+// ── Phase 1: Cluster Types ───────────────────────────────────────────
+
+/// Unique identifier for a node in the cluster.
+pub type NodeId = String;
+
+/// Role a node plays in the cluster.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeRole {
+    /// All-in-one mode for local development.
+    Dev,
+    /// Routes writes/queries, manages metadata via Raft.
+    Coordinator,
+    /// Stores data, runs ShardActors, serves sub-queries.
+    Storage,
+}
+
+/// Liveness state of a node as seen by the SWIM gossip protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeState {
+    Alive,
+    Suspect,
+    Dead,
+}
+
+/// Information about a node in the cluster.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeInfo {
+    pub node_id: NodeId,
+    pub role: NodeRole,
+    pub addr: String,
+    pub state: NodeState,
+}
+
+/// Assignment of a shard to leader + replica nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardAssignment {
+    pub shard_id: ShardId,
+    pub leader: NodeId,
+    pub replicas: Vec<NodeId>,
+}
+
+/// Read consistency level for distributed queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsistencyLevel {
+    /// Read from any single node (including replicas). Fastest, may be stale.
+    One,
+    /// Read from a quorum of nodes.
+    Quorum,
+    /// Read from all nodes holding the shard.
+    All,
+}
+
+impl Default for ConsistencyLevel {
+    fn default() -> Self {
+        Self::One
+    }
+}

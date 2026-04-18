@@ -494,7 +494,11 @@ bytes = "1"
 > [!NOTE]
 > **No protobuf compiler required.** The `rpc::proto` module hand-defines message types as Rust structs with `prost` derive macros. This avoids a build-time `protoc` dependency while staying compatible with the gRPC wire format.
 >
-> **Raft library choice deferred.** The `raft/` module defines trait interfaces. The SWE team may choose `openraft` crate or implement from scratch. The skeleton is crate-agnostic.
+> **Raft: `openraft` crate.** The `raft/` module wraps `openraft` with our `MetadataStateMachine`. This gives us a battle-tested Raft implementation.
+>
+> **WAL streaming: custom TCP.** Replication uses raw `tokio::net::TcpStream` with length-prefixed framing instead of gRPC, for lower overhead on the hot path.
+>
+> **Follower reads: ReadRouter included.** A `ReadRouter` in `coordinator/` supports `consistency=ONE` reads from replicas.
 
 ---
 
@@ -613,10 +617,10 @@ match config.cluster.role.as_str() {
 
 ---
 
-## 13. Open Questions
+## 13. Resolved Questions
 
-| # | Question | Impact |
-|---|----------|--------|
-| Q1 | **Raft crate choice** — Should we prescribe `openraft` or let the SWE team decide? Current plan: crate-agnostic traits. | Medium |
-| Q2 | **gRPC vs custom TCP for WAL streaming** — `tonic` bidirectional streaming works but adds overhead. Custom TCP is faster. | Medium |
-| Q3 | **Follower reads in Phase 1** — The architecture doc mentions `consistency=ONE` for follower reads. Should the skeleton include a `ReadRouter` that can send reads to replicas? | Low — can be added later |
+| # | Question | Decision |
+|---|----------|----------|
+| Q1 | Raft crate choice? | ✅ **`openraft`** — battle-tested, async-native, good docs |
+| Q2 | gRPC vs custom TCP for WAL streaming? | ✅ **Custom TCP** — `tokio::net::TcpStream` with length-prefixed framing; lower overhead on hot path |
+| Q3 | Follower reads in Phase 1? | ✅ **Yes** — `ReadRouter` added to `coordinator/` with `consistency=ONE` support |

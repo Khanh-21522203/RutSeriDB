@@ -7,6 +7,7 @@
 //! Remove this once engineers start implementing the TODOs.
 #![allow(unused)]
 
+// ── Phase 0: Single-Node Core ────────────────────────────────────────
 pub mod api;
 pub mod background;
 pub mod common;
@@ -14,3 +15,13 @@ pub mod config;
 pub mod ingest;
 pub mod query;
 pub mod storage;
+
+// ── Phase 1: Distribution ────────────────────────────────────────────
+pub mod coordinator;
+pub mod gossip;
+pub mod raft;
+pub mod replication;
+pub mod rpc;
+
+// ── Client Library ───────────────────────────────────────────────────
+pub mod client;

@@ -75,6 +75,42 @@ pub enum RutSeriError {
     #[error("Serialization error: {0}")]
     Serialization(String),
 
+    // ── Phase 1: Cluster ─────────────────────────────────────────────
+    #[error("Cluster error: {0}")]
+    Cluster(String),
+
+    #[error("Node unreachable: {node_id} at {addr}")]
+    NodeUnreachable { node_id: String, addr: String },
+
+    #[error("Leader not found for shard {0}")]
+    LeaderNotFound(u32),
+
+    // ── Phase 1: Replication ─────────────────────────────────────────
+    #[error("Replication error: {0}")]
+    Replication(String),
+
+    #[error("Replication lag too large for shard {shard_id}: replica at seq {replica_seq}, leader at {leader_seq}")]
+    ReplicationLagExceeded {
+        shard_id: u32,
+        replica_seq: u64,
+        leader_seq: u64,
+    },
+
+    // ── Phase 1: Raft ────────────────────────────────────────────────
+    #[error("Raft error: {0}")]
+    Raft(String),
+
+    // ── Phase 1: RPC ─────────────────────────────────────────────────
+    #[error("RPC error: {0}")]
+    Rpc(String),
+
+    #[error("RPC timeout to {addr} after {timeout_ms} ms")]
+    RpcTimeout { addr: String, timeout_ms: u64 },
+
+    // ── Phase 1: Gossip ──────────────────────────────────────────────
+    #[error("Gossip error: {0}")]
+    Gossip(String),
+
     // ── Internal ─────────────────────────────────────────────────────
     #[error("Internal error: {0}")]
     Internal(String),

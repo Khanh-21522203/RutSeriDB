@@ -22,6 +22,16 @@ pub struct RutSeriConfig {
     pub merge: MergeConfig,
     pub indexes: IndexConfig,
 
+    // ── Phase 1: Distribution ────────────────────────────────────────
+    #[serde(default)]
+    pub gossip: GossipConfig,
+
+    #[serde(default)]
+    pub consistency: ConsistencyConfig,
+
+    #[serde(default)]
+    pub raft: RaftConfig,
+
     /// Per-table overrides. Key = table name.
     #[serde(default)]
     pub tables: std::collections::HashMap<String, TableConfig>,
@@ -166,6 +176,86 @@ pub struct TableConfig {
     pub primary_tags: Option<Vec<String>>,
 }
 
+// ── Phase 1: Distribution Configs ────────────────────────────────────
+
+/// SWIM gossip protocol settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GossipConfig {
+    /// Direct probe interval (ms). Default: 1000.
+    #[serde(default = "default_probe_interval")]
+    pub probe_interval_ms: u64,
+
+    /// Time before Suspect → Dead (ms). Default: 2000.
+    #[serde(default = "default_suspect_timeout")]
+    pub suspect_timeout_ms: u64,
+
+    /// Number of indirect probes per round. Default: 3.
+    #[serde(default = "default_fanout")]
+    pub fanout: usize,
+
+    /// Bootstrap peer addresses for cluster join.
+    #[serde(default)]
+    pub seed_nodes: Vec<String>,
+}
+
+impl Default for GossipConfig {
+    fn default() -> Self {
+        Self {
+            probe_interval_ms: 1000,
+            suspect_timeout_ms: 2000,
+            fanout: 3,
+            seed_nodes: Vec::new(),
+        }
+    }
+}
+
+/// Read consistency settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConsistencyConfig {
+    /// Read consistency level: "one", "quorum", or "all". Default: "one".
+    #[serde(default = "default_read_level")]
+    pub read_level: String,
+}
+
+impl Default for ConsistencyConfig {
+    fn default() -> Self {
+        Self {
+            read_level: "one".to_string(),
+        }
+    }
+}
+
+/// Raft consensus settings for the Coordinator metadata group.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RaftConfig {
+    /// Election timeout range start (ms). Default: 1000.
+    #[serde(default = "default_election_timeout")]
+    pub election_timeout_ms: u64,
+
+    /// Leader heartbeat interval (ms). Default: 250.
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval_ms: u64,
+
+    /// Number of log entries before triggering a snapshot. Default: 1000.
+    #[serde(default = "default_snapshot_threshold")]
+    pub snapshot_threshold: u64,
+
+    /// Directory for Raft log and snapshot storage.
+    #[serde(default = "default_raft_data_dir")]
+    pub data_dir: PathBuf,
+}
+
+impl Default for RaftConfig {
+    fn default() -> Self {
+        Self {
+            election_timeout_ms: 1000,
+            heartbeat_interval_ms: 250,
+            snapshot_threshold: 1000,
+            data_dir: PathBuf::from("./raft-data"),
+        }
+    }
+}
+
 // ── Defaults ─────────────────────────────────────────────────────────
 
 fn default_role() -> String { "dev".to_string() }
@@ -183,6 +273,16 @@ fn default_true() -> bool { true }
 fn default_max_parts() -> u32 { 8 }
 fn default_target_part_size() -> u64 { 256 * 1024 * 1024 } // 256 MB
 fn default_max_values_per_key() -> usize { 10_000 }
+
+// Phase 1 defaults
+fn default_probe_interval() -> u64 { 1000 }
+fn default_suspect_timeout() -> u64 { 2000 }
+fn default_fanout() -> usize { 3 }
+fn default_read_level() -> String { "one".to_string() }
+fn default_election_timeout() -> u64 { 1000 }
+fn default_heartbeat_interval() -> u64 { 250 }
+fn default_snapshot_threshold() -> u64 { 1000 }
+fn default_raft_data_dir() -> PathBuf { PathBuf::from("./raft-data") }
 
 // ── Loading ──────────────────────────────────────────────────────────
 
@@ -203,6 +303,8 @@ impl RutSeriConfig {
         // - num_shards > 0
         // - data_dir exists or can be created
         // - durability.level is one of ["async", "sync", "sync_batch"]
+        // - consistency.read_level is one of ["one", "quorum", "all"]
+        // - raft.election_timeout_ms > raft.heartbeat_interval_ms
 
         Ok(config)
     }

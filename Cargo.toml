@@ -47,5 +47,20 @@ bytes = "1"
 # Convenience error handling for main
 anyhow = "1"
 
+# ── Phase 1: Distribution ─────────────────────────────────────────────
+
+# Raft consensus (metadata replication across Coordinators)
+openraft = { version = "0.10.0-alpha.17", features = ["serde"] }
+
+# gRPC (Coordinator ↔ StorageNode communication)
+tonic = "0.13"
+prost = "0.13"
+
+# Random peer selection for SWIM gossip
+rand = "0.9"
+
+# HTTP client (client library module)
+reqwest = { version = "0.12", features = ["json"] }
+
 [dev-dependencies]
 tempfile = "3"
