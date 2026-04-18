@@ -1,6 +1,51 @@
 [package]
-name = "RutSeriDB"
+name = "rutseridb"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP server
+axum = "0.8"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Arrow columnar format (ResultSet)
+arrow = { version = "54", features = ["json"] }
+
+# Hashing
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+crc32fast = "1"
+
+# Compression
+lz4_flex = "0.11"
+
+# IDs
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Error handling
+thiserror = "2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# SQL parsing
+sqlparser = "0.52"
+
+# Bytes manipulation
+bytes = "1"
+
+# Convenience error handling for main
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
